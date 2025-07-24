@@ -61,8 +61,8 @@ def add_north_pole_to_dataset(ds, var_name='IVT'):
 
 def process_ivt(year, month, model_input):
     yyyymm = f"{year}{month}"
-    input_file = os.path.join(model_input, f"IVT_CNRM_{yyyymm}.nc")
-    output_file = os.path.join(model_input, f"IVT_CNRM_{yyyymm}_wrapped_pole.nc")
+    input_file = os.path.join(model_input, f"IVT_NORESM_{yyyymm}.nc")
+    output_file = os.path.join(model_input, f"IVT_NORESM_{yyyymm}_wrapped_pole.nc")
 
     print(f"🔍 Loading: {input_file}")
     ds = xr.open_dataset(input_file)

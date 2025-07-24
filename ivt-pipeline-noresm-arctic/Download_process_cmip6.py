@@ -39,11 +39,15 @@ def copy_from_ecfs(archive_path, local_dir):
 
 
 def extract_tar(archive_path, extract_dir):
-    """Extracts a tar file to the given directory."""
+    """Extracts a tar file to the given directory and returns list of extracted files."""
     print(f"→ Extracting {archive_path} to {extract_dir}")
+    extracted_files = []
     with tarfile.open(archive_path, "r") as tar:
         tar.extractall(path=extract_dir)
+        # Collect full paths of extracted regular files
+        extracted_files = [os.path.join(extract_dir, member.name) for member in tar.getmembers() if member.isfile()]
     print(f"✓ Extraction complete.")
+    return extracted_files
 
 def load_variable_from_files(var_name, files):
     """Load and concatenate a variable from a list of NetCDF files."""
@@ -160,7 +164,7 @@ def main():
     print(f" Preparing to fetch and extract from archive: {archive_path}")
     local_tar = copy_from_ecfs(archive_path, output_dir)
     print(f" Extracting contents from: {local_tar}")
-    extract_tar(local_tar, output_dir)
+    extracted_files = extract_tar(local_tar, output_dir)
     print(f"✓ Extraction done.")
     
     # Rename .ncz files to .nc after extraction
@@ -235,7 +239,7 @@ def main():
     except Exception as e:
         print(f"⚠️ Could not delete archive file {local_tar}: {e}")
     
-    for f in nc_files:
+    for f in extracted_files:
         try:
             os.remove(f)
             print(f"✓ Deleted extracted file: {f}")

@@ -75,9 +75,9 @@ OUTPUT_DIR=$4  # final IVT output
 g=9.81
 
 # === FILES ===
-hus_file="${INPUT_DIR}/q_${YYYYMM}_Arctic_cnrm_9plev.nc"
-ua_file="${INPUT_DIR}/u_${YYYYMM}_Arctic_cnrm_9plev.nc"
-va_file="${INPUT_DIR}/v_${YYYYMM}_Arctic_cnrm_9plev.nc"
+hus_file="${INPUT_DIR}/q_${YYYYMM}_Arctic_noresm_9plev.nc"
+ua_file="${INPUT_DIR}/u_${YYYYMM}_Arctic_noresm_9plev.nc"
+va_file="${INPUT_DIR}/v_${YYYYMM}_Arctic_noresm_9plev.nc"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -106,16 +106,16 @@ cdo divc,$g "${OUTPUT_DIR}/ivt_y_${YYYYMM}_Pa.nc" "${OUTPUT_DIR}/ivt_y_${YYYYMM}
 cdo sqr "${OUTPUT_DIR}/ivt_x_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_x_sq_${YYYYMM}.nc"
 cdo sqr "${OUTPUT_DIR}/ivt_y_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_y_sq_${YYYYMM}.nc"
 cdo add "${OUTPUT_DIR}/ivt_x_sq_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_y_sq_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_sum_sq_${YYYYMM}.nc"
-cdo sqrt "${OUTPUT_DIR}/ivt_sum_sq_${YYYYMM}.nc" "${OUTPUT_DIR}/IVT_CNRM_${YYYYMM}_tmp.nc"
+cdo sqrt "${OUTPUT_DIR}/ivt_sum_sq_${YYYYMM}.nc" "${OUTPUT_DIR}/IVT_NORESM_${YYYYMM}_tmp.nc"
 
 # === STEP 6: Rename variable to IVT ===
 
-ncrename -Ov q,IVT "${OUTPUT_DIR}/IVT_CNRM_${YYYYMM}_tmp.nc" "${OUTPUT_DIR}/IVT_CNRM_${YYYYMM}.nc"
+ncrename -Ov q,IVT "${OUTPUT_DIR}/IVT_NORESM_${YYYYMM}_tmp.nc" "${OUTPUT_DIR}/IVT_NORESM_${YYYYMM}.nc"
 
 
 # === STEP 7: Cleanup ===
 rm "${OUTPUT_DIR}/ivt_x_sq_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_y_sq_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_sum_sq_${YYYYMM}.nc"
-rm "${OUTPUT_DIR}/q_u_${YYYYMM}.nc" "${OUTPUT_DIR}/q_v_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_x_${YYYYMM}_Pa.nc" "${OUTPUT_DIR}/ivt_y_${YYYYMM}_Pa.nc" "${OUTPUT_DIR}/IVT_CNRM_${YYYYMM}_tmp.nc"
+rm "${OUTPUT_DIR}/q_u_${YYYYMM}.nc" "${OUTPUT_DIR}/q_v_${YYYYMM}.nc" "${OUTPUT_DIR}/ivt_x_${YYYYMM}_Pa.nc" "${OUTPUT_DIR}/ivt_y_${YYYYMM}_Pa.nc" "${OUTPUT_DIR}/IVT_NORESM_${YYYYMM}_tmp.nc"
 
-echo "✅ IVT for $YYYYMM saved to ${OUTPUT_DIR}/IVT_CNRM_${YYYYMM}.nc"
+echo "✅ IVT for $YYYYMM saved to ${OUTPUT_DIR}/IVT_NORESM_${YYYYMM}.nc"
 

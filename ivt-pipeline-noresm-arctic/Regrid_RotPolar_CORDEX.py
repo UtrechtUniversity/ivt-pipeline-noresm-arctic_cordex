@@ -78,7 +78,7 @@ def regrid_to_ArcticCORDEX(IVT_with_pole, base_dir):
     target_file = os.path.join(
         base_dir,
         "ivt-pipeline",
-        "tas_ARC-12_NorESM2-MM_historical_r1i1p1f1_UU-IMAU_RACMO24P-NN_v1-r1_day_20110101-20141231.nc"
+        "example_grid.nc"
     )    
     ds_target = xr.open_dataset(target_file)
     
@@ -140,8 +140,8 @@ if __name__ == "__main__":
     output_dir = sys.argv[4]
     base_dir = sys.argv[5]
 
-    input_file = os.path.join(input_dir, f"IVT_CNRM_{year}{month}.nc")
-    output_file = os.path.join(output_dir, f"IVT_CNRM_CORDEX_{year}{month}.nc")
+    input_file = os.path.join(input_dir, f"IVT_NORESM_{year}{month}.nc")
+    output_file = os.path.join(output_dir, f"IVT_NORESM_CORDEX_{year}{month}.nc")
 
     print(f"📂 Loading IVT input: {input_file}")
     IVT_org = xr.open_dataset(input_file)
