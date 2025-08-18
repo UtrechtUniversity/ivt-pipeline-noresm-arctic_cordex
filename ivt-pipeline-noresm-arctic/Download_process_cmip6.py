@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
+# NorESM
 
 import xarray as xr
 import numpy as np
@@ -15,6 +16,8 @@ import shutil
 import tempfile
 import sys
 import subprocess
+
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 def copy_from_ecfs(archive_path, local_dir):
     """Copy a .tar file from ECFS to a local directory using `ecp`."""
@@ -50,18 +53,55 @@ def extract_tar(archive_path, extract_dir):
     return extracted_files
 
 def load_variable_from_files(var_name, files):
-    """Load and concatenate a variable from a list of NetCDF files."""
+    """
+    Load and concatenate a variable from a list of NetCDF files.
+    Handles aliases like QV -> q, removes duplicates, and prints time range.
+    """
+    import numpy as np
+
+    VAR_ALIASES = {
+        "QV": ["QV", "q"],
+        "U": ["U", "u"],
+        "V": ["V", "v"]
+    }
+
+    possible_names = VAR_ALIASES.get(var_name, [var_name])
     datasets = []
+
     for f in files:
         try:
-            ds = xr.open_dataset(f, engine="netcdf4",chunks={})#{'time': 'auto'})
-            if var_name in ds:
-                datasets.append(ds[var_name])
+            ds = xr.open_dataset(f, engine="h5netcdf", chunks={})
+            found = False
+            for name in possible_names:
+                if name in ds:
+                    data = ds[name]
+                    if "time" in data.dims:
+                        datasets.append(data)
+                        found = True
+                    else:
+                        print(f"⚠️ Variable {name} in {f} has no time dimension.")
+                    break
+            if not found:
+                print(f"⚠️ Variable {var_name} not found in {f}.")
         except Exception as e:
-            print(f"⚠️ Could not load {var_name} from {f}: {e}")
+            print(f"❌ Could not load {var_name} from {f}: {e}")
+
     if datasets:
-        return xr.concat(datasets, dim='time').sortby('time')
+        combined = xr.concat(datasets, dim="time").sortby("time")
+
+        # 🧹 Remove duplicate timestamps
+        _, unique_idx = np.unique(combined["time"], return_index=True)
+        combined = combined.isel(time=unique_idx)
+
+        # ✅ Diagnostic info
+        start_time = str(combined.time.values[0])
+        end_time = str(combined.time.values[-1])
+        print(f"📆 {var_name} loaded from {len(files)} files.")
+        print(f"📅 Time range: {start_time} → {end_time}")
+        print(f"🕒 Total timesteps: {combined.sizes['time']}")
+        return combined
     else:
+        print(f"⚠️ No valid datasets found for variable '{var_name}'.")
         return None
         
 def interpolate_to_pressure_levels(data, p_full, target_pressures):
@@ -81,7 +121,15 @@ def interpolate_to_pressure_levels(data, p_full, target_pressures):
     p_full = p_full.chunk({'level': -1})
 
     def interp_1d(p, x, new_p):
-        return np.interp(new_p, p[::-1], x[::-1])  # reverse for ascending order
+        p = np.asarray(p).ravel()
+        x = np.asarray(x).ravel()
+    
+        # Ensure p is ascending for np.interp
+        if p[0] > p[-1]:
+            p = p[::-1]
+            x = x[::-1]
+    
+        return np.interp(new_p, p, x)
 
     interpolated = xr.apply_ufunc(
         interp_1d,
@@ -89,14 +137,18 @@ def interpolate_to_pressure_levels(data, p_full, target_pressures):
         data,
         input_core_dims=[["level"], ["level"]],
         output_core_dims=[["plev"]],
-        output_sizes={"plev": len(target_pressures)},
-        vectorize=True,
+        exclude_dims=set(("level",)),  # tells xarray level disappears
         dask="parallelized",
+        vectorize=True,
+        dask_gufunc_kwargs={"output_sizes": {"plev": len(target_pressures)}},
         output_dtypes=[data.dtype],
         kwargs={"new_p": target_pressures},
     )
 
     interpolated = interpolated.assign_coords(plev=target_pressures)
+    print(f"Interpolated shape: {interpolated.shape}")
+    print(f"Interpolated dims: {interpolated.dims}")
+
     return interpolated
 
 def align_and_interpolate(data_var, p_full, target_pressures):
@@ -110,7 +162,6 @@ def align_and_interpolate(data_var, p_full, target_pressures):
     data_sel = data_var.sel(time=common_times)
     p_sel = p_full.sel(time=common_times)
     return interpolate_to_pressure_levels(data_sel, p_sel, target_pressures)
-
 
 def main():
     # Parse command-line arguments
@@ -173,39 +224,68 @@ def main():
             old_path = os.path.join(output_dir, fname)
             new_path = os.path.join(output_dir, fname.replace(".ncz", ".nc"))
             os.rename(old_path, new_path)
-            print(f"Renamed: {old_path} → {new_path}")
+            #print(f"Renamed: {old_path} → {new_path}")
+    print("renaming for .ncz to .nc completed")
 
-    nc_files = sorted(glob.glob(os.path.join(output_dir, "*.nc")))
+    yyyymm = f"{year}{month:02d}"  # e.g. "198503"
+    nc_files = [
+        os.path.join(output_dir, f)
+        for f in sorted(os.listdir(output_dir))
+        if f.startswith("caf") and f.endswith(".nc") and yyyymm in f
+    ]
     
     # Load variables QV, U, V from the extracted files
-    print(f"Found {len(nc_files)} files in {archive_path}")
+    #print(f"Found {len(nc_files)} files in {archive_path}")
     q_month = load_variable_from_files("QV", nc_files)
     u_month = load_variable_from_files("U", nc_files)
     v_month = load_variable_from_files("V", nc_files)
-
-    if q_month is None or u_month is None or v_month is None:
-        print("❌ Failed to load all required variables (QV, U, V). Exiting.")
-        return
-
+    ps_month = load_variable_from_files("PS", nc_files)
+    
+    q_month = q_month.load()
+    u_month = u_month.load()
+    v_month = v_month.load() 
+    ps_month = ps_month.load()
+    
     # Subset data for Arctic region (latitude >= LAT_MIN)
     q_month = q_month.where(q_month.lat >= LAT_MIN, drop=True)
     u_month = u_month.where(u_month.lat >= LAT_MIN, drop=True)
     v_month = v_month.where(v_month.lat >= LAT_MIN, drop=True)
+    ps_month = ps_month.where(ps_month.lat >= LAT_MIN, drop=True)
+    
+    print(f"Original variable shape: {v_month.shape}")
+    print(f"Original dims: {v_month.dims}")
 
     # Load hybrid coefficients and surface pressure from one of the files
-#    with xr.open_dataset(nc_files[0], chunks={'time': 'auto'}, engine="netcdf4") as ds:
-    with xr.open_dataset(nc_files[0],engine="netcdf4",chunks={}) as ds:
-        ps = ds['PS'].where(ds.lat >= LAT_MIN, drop=True)
-        akm = ds['akm']  # size 32 (levels)
-        bkm = ds['bkm']  # size 32 (levels)
+    sample_file = nc_files[0]
+    ds = xr.open_dataset(sample_file, engine="h5netcdf")
+    akm = ds["akm"]
+    bkm = ds["bkm"]
+    
+    # Expand hybrid coeffs over full dimensions
+    akm_4d = akm.expand_dims({
+        "time": ps_month.time,
+        "lat":  ps_month.lat,
+        "lon":  ps_month.lon
+    }).transpose("time", "level", "lat", "lon")
+    
+    bkm_4d = bkm.expand_dims({
+        "time": ps_month.time,
+        "lat":  ps_month.lat,
+        "lon":  ps_month.lon
+    }).transpose("time", "level", "lat", "lon")
+    
+    # Expand surface pressure to full 4D shape
+    ps_4d = ps_month.expand_dims({"level": akm.level}, axis=1).transpose(
+        "time", "level", "lat", "lon"
+    )
+    
+    # Compute full pressure field
+    p_full = akm_4d + bkm_4d * ps_4d
+    
+    print("p_full shape:", p_full.shape)
+    print("Sample p_full:", p_full.isel(time=0, lat=0, lon=0).values)
+    print("p_full min:", p_full.min().compute().item(), "max:", p_full.max().compute().item())
 
-        # Expand dims for broadcasting: time, lat, lon from PS, level from akm/bkm
-        akm_4d = akm.expand_dims({'time': ps.time, 'lat': ps.lat, 'lon': ps.lon}).transpose('time', 'level', 'lat', 'lon')
-        bkm_4d = bkm.expand_dims({'time': ps.time, 'lat': ps.lat, 'lon': ps.lon}).transpose('time', 'level', 'lat', 'lon')
-        ps_4d = ps.expand_dims({'level': akm.level}, axis=1).transpose('time', 'level', 'lat', 'lon')
-
-        # Calculate full pressure at model levels
-        p_full = akm_4d + bkm_4d * ps_4d
 
     # Dictionary of variables to process and save
     vars_dict = {'q': q_month, 'u': u_month, 'v': v_month}
@@ -214,6 +294,11 @@ def main():
     # Interpolate each variable to standard pressure levels and save to NetCDF
     for var_name, data_var in vars_dict.items():
         data_on_plev = align_and_interpolate(data_var, p_full, target_pressures)
+
+        if not isinstance(data_on_plev.time.values[0], np.datetime64):
+            time_np = data_on_plev.indexes["time"].to_datetimeindex()
+            data_on_plev = data_on_plev.assign_coords(time=time_np)
+        
         ds_out = xr.Dataset({var_name: data_on_plev})
         ds_out = ds_out.assign_coords({
             'plev': target_pressures,
@@ -222,30 +307,18 @@ def main():
             'lon': data_on_plev.lon,
         })
         ds_out['plev'].attrs.update({
-            'units': 'Pa',
+            'units': 'Pa', 
             'standard_name': 'air_pressure',
             'axis': 'Z',
             'positive': 'down'
         })
+        # reorderd to convention
+        ds_out = ds_out.transpose('time', 'plev', 'lat', 'lon')
+      
         output_filename = f"{var_name}_{year}{month:02}_Arctic_noresm_9plev.nc"
         output_path = os.path.join(output_dir, output_filename)
         ds_out.to_netcdf(output_path)
         print(f"✓ Saved {var_name} to {output_path}")
-
-    # clean up tar and nc(z) files after processing
-    try:
-        os.remove(local_tar)
-        print(f"✓ Deleted archive file: {local_tar}")
-    except Exception as e:
-        print(f"⚠️ Could not delete archive file {local_tar}: {e}")
-    
-    for f in extracted_files:
-        try:
-            os.remove(f)
-            print(f"✓ Deleted extracted file: {f}")
-        except Exception as e:
-            print(f"⚠️ Could not delete extracted file {f}: {e}")
-
 
     # Close Dask client and cluster
     print("\n✅ Closing Dask client.")
