@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
+# NorESM
 
 import xarray as xr
 from scipy.interpolate import RegularGridInterpolator
@@ -7,149 +8,121 @@ import numpy as np
 import os
 import sys
 
+# ─────────────────────────────────────────────────────────────────────────────
 def wrap_lon(IVT):
-    '''
-    Wrap longitude coordinate of an xarray DataArray or Dataset along 'lon'.
-    Assumes longitude in 0-360 range, wraps by adding one ghost point before and after.
-
-    '''
-    print("🔁 Wrapping first and last longitude to handle global continuity...")
-
-    lon = IVT.lon.values               # get lon values
-    left_wrap_lon = lon[-1] - 360      # point before 0 (e.g., ~358.6 - 360 = -1.40625)
-    right_wrap_lon = lon[0] + 360      # point after last (e.g., 0 + 360 = 360)
-
-    left_wrap_data = IVT.isel(lon=-1).assign_coords(lon=left_wrap_lon) #add the data 359 to -1
-    right_wrap_data = IVT.isel(lon=0).assign_coords(lon=right_wrap_lon) #add the data from 0 tot 360
-
-    wrapped_da = xr.concat([left_wrap_data, IVT, right_wrap_data], dim="lon") #concat to 1 dataset with now having 2 more lon points
-    
-    print("✅ Longitude wrapping successful.")
-    
-    return wrapped_da
-
-def add_polar_point(IVT_wrapped):
-    '''
-    Adds a synthetic North Pole (90° latitude) point to an IVT dataset by averaging 
-    the values at the highest existing latitude across all longitudes.
-
-    Raises:
-        ValueError: If the dataset already includes a 90° latitude point.
-    '''
-    if 90.0 in IVT_wrapped.lat:
-        raise ValueError("Data already contains a 90° latitude.")
-    
-    print("➕ Adding synthetic North Pole point (lat=90°) based on average of top latitude...")
-
-    # calculate the average value of the grid points surrounding the pole
-    polar_value = IVT_wrapped.sel(lat=IVT_wrapped.lat[-1]).mean(dim='lon')
-
-    # create logistics for lat lon info
-    lon_vals = IVT_wrapped.lon.values
-    new_lat=90
-
-    # make sure polar_value has the same shape as the IVT data
-    polar_expanded = (
-        polar_value
-        .expand_dims({'lon': lon_vals}, axis=-1)
-        .expand_dims('lat')
-        .assign_coords(lat=[new_lat])
-    )
-    # concatenate IVT with polar point
-    IVT_with_pole = xr.concat([IVT_wrapped, polar_expanded], dim='lat').sortby('lat')
-    
-    print("✅ Polar point added successfully.")
-
-    return IVT_with_pole
-
-def regrid_to_ArcticCORDEX(IVT_with_pole, base_dir):
     """
-    Regrids a DataArray with lat/lon to RACMO2.4 CORDEX Arctic grid.
-    Target grid is hardcoded: 
+    Wrap a 1D lon axis into –180…+180, add  
+    one ghost point before and after, then sort.
     """
-    print("📐 Regridding to CORDEX Arctic target grid...")
+    import xarray as xr
 
-    ds_gcm = IVT_with_pole
-    gcm_lat = IVT_with_pole.lat.values
-    gcm_lon = IVT_with_pole.lon.values
-    gcm_vals = IVT_with_pole.values  # shape: (time, lat, lon)
-    
-    #load target grid CORDEX RACMO2.4
-    target_file = os.path.join(
-        base_dir,
-        "ivt-pipeline",
-        "example_grid.nc"
-    )    
-    ds_target = xr.open_dataset(target_file)
-    
-    lat_target = ds_target['lat'].values  # shape (rlat, rlon)
-    lon_target = ds_target['lon'].values  # shape (rlat, rlon)
-    rlat = ds_target['rlat'].values
-    rlon = ds_target['rlon'].values
-    
-    # Convert target lon to 0-360 range if needed
-    lon_target_360 = np.where(lon_target < 0, lon_target + 360, lon_target)
-    
-    # Prepare interpolation points
-    points_interp = np.stack([lat_target.ravel(), lon_target_360.ravel()], axis=-1)  # shape (N, 2)
-    
-    # Interpolate per timestep
-    interpolated_data = []
+    print("🔁 Wrapping longitude with ghost points…")
+
+    # 1) remap into –180…+180
+    lon_mod = ((IVT.lon + 180) % 360) - 180
+    IVT2    = IVT.assign_coords(lon=lon_mod)
+
+    # 2) compute ghost longitudes
+    lon_vals     = IVT2.lon.values
+    left_ghost   = lon_vals[-1] - 360    # one step before the first real cell
+    right_ghost  = lon_vals[0]  + 360    # one step after the last real cell
+
+    # 3) slice out the edge profiles & re-label them
+    left_da  = IVT2.isel(lon=-1).assign_coords(lon=left_ghost)
+    right_da = IVT2.isel(lon= 0).assign_coords(lon=right_ghost)
+
+    # 4) assemble [left ghost | IVT2 | right ghost], then sort
+    wrapped = xr.concat([left_da, IVT2, right_da], dim="lon")
+    wrapped = wrapped.sortby("lon")
+
+    print("✅ Longitude wrapping successful:",
+          "lon.min/max →", wrapped.lon.min().item(),
+                         wrapped.lon.max().item())
+    return wrapped
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+def regrid_to_ArcticCORDEX(IVT_wrapped, base_dir):
+    """
+    Regrid a DataArray (time, lat, lon) on a regular GCM grid
+    onto the RACMO2.4 CORDEX Arctic rotated-pole grid.
+    Assumes IVT_wrapped.lon & .lat are strictly monotonic.
+    """
+    print("📐 Regridding to CORDEX Arctic target grid…")
+
+    # 1) Pull out the monotonic coords + data
+    gcm_lat  = IVT_wrapped.lat.values      # 1D, strictly increasing
+    gcm_lon  = IVT_wrapped.lon.values      # 1D, strictly increasing
+    gcm_vals = IVT_wrapped.values          # shape (time, lat, lon)
+
+    # 2) Load the CF-compliant CORDEX example grid
+    target_file = os.path.join(base_dir, "ivt-pipeline", "example_grid.nc")
+    ds_tgt      = xr.open_dataset(target_file)
+    lat_tgt     = ds_tgt["lat"].values     # 2D (rlat, rlon)
+    lon_tgt     = ds_tgt["lon"].values     # 2D (rlat, rlon)
+    rlat        = ds_tgt["rlat"].values    # 1D
+    rlon        = ds_tgt["rlon"].values    # 1D
+
+    # 3) Build the (lat,lon) points to sample
+    pts = np.stack([lat_tgt.ravel(), lon_tgt.ravel()], axis=-1)
+
+    # 4) Interpolate each time-slice
+    out = []
     for t in range(gcm_vals.shape[0]):
-        interpolator = RegularGridInterpolator(
+        interp = RegularGridInterpolator(
             (gcm_lat, gcm_lon),
             gcm_vals[t],
-            method='linear',
+            method="linear",
             bounds_error=False,
             fill_value=np.nan
         )
-        interp_t = interpolator(points_interp).reshape(lat_target.shape)
-        interpolated_data.append(interp_t)
-    
-    interpolated_data = np.stack(interpolated_data)  # shape (time, rlat, rlon)
-    
-    # Create DataArray with metadata
+        arr = interp(pts).reshape(lat_tgt.shape)
+        out.append(arr)
+    data = np.stack(out, axis=0)  # (time, rlat, rlon)
+
+    # 5) Pack into an xarray.DataArray
     IVT_regridded = xr.DataArray(
-        interpolated_data,
+        data,
         dims=("time", "rlat", "rlon"),
         coords={
-            "time": ds_gcm.time,
+            "time": IVT_wrapped.time,
             "rlat": rlat,
             "rlon": rlon,
-            "lat": (("rlat", "rlon"), lat_target),
-            "lon": (("rlat", "rlon"), lon_target)
+            "lat":  (("rlat","rlon"), lat_tgt),
+            "lon":  (("rlat","rlon"), lon_tgt),
         },
-        name="IVT",
-        attrs={
-            "units": IVT_with_pole.attrs.get("units", "unknown"),
-            "long_name": "Integrated Vapor Transport regridded"
-        }
+        name=IVT_wrapped.name,
+        attrs=IVT_wrapped.attrs
     )
 
-    print("✅ Regridding to 2D lat-lon target grid completed.")
+    print("✅ Regridding complete: output dims", IVT_regridded.dims)
     return IVT_regridded
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if len(sys.argv) != 6:
         print("Usage: python Regrid_RotPolar_CORDEX.py <YEAR> <MONTH> <INPUT_DIR> <OUTPUT_DIR> <BASE_DIR>")
         sys.exit(1)
 
-    year = sys.argv[1]
-    month = sys.argv[2]
-    input_dir = sys.argv[3]
+    year       = sys.argv[1]
+    month      = sys.argv[2]
+    input_dir  = sys.argv[3]
     output_dir = sys.argv[4]
-    base_dir = sys.argv[5]
+    base_dir   = sys.argv[5]
 
-    input_file = os.path.join(input_dir, f"IVT_NORESM_{year}{month}.nc")
-    output_file = os.path.join(output_dir, f"IVT_NORESM_CORDEX_{year}{month}.nc")
+    input_file  = os.path.join(input_dir,   f"IVT_NORESM_{year}{month}.nc")
+    output_file = os.path.join(output_dir,  f"IVT_NORESM_CORDEX_{year}{month}.nc")
 
     print(f"📂 Loading IVT input: {input_file}")
-    IVT_org = xr.open_dataset(input_file)
-    IVT = IVT_org.IVT
+    IVT_org     = xr.open_dataset(input_file)
+    IVT         = IVT_org.IVT
 
-    IVT_wrapped = wrap_lon(IVT)
-    IVT_with_pole = add_polar_point(IVT_wrapped)
-    IVT_regridded = regrid_to_ArcticCORDEX(IVT_with_pole,base_dir)
+    # Activate wrapping
+    IVT_wrapped    = wrap_lon(IVT)
+    # Activate regridding
+    IVT_regridded = regrid_to_ArcticCORDEX(IVT_wrapped, base_dir)
 
     print(f"💾 Saving regridded IVT to: {output_file}")
     IVT_regridded.to_netcdf(output_file)

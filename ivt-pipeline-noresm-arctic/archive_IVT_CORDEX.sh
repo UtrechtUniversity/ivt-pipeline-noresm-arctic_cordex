@@ -1,24 +1,26 @@
 #!/bin/bash
 set -e
-# archive IVT file to tape archive
 
-
-# === USAGE CHECK ===
+# Usage: $0 <YEAR> <MONTH> <input_dir> <archive_dir>
 if [ "$#" -ne 4 ]; then
-  echo "Usage: $0 <YEAR> <MONTH> <input_dir> <output_dir>"
+  echo "Usage: $0 <YEAR> <MONTH> <input_dir> <archive_dir>"
   exit 1
 fi
 
-# === INPUTS FROM WRAPPER ===
-YEAR=$1      
-MONTH=$2 
-INPUT_DIR=$3   # CNRM IVT in polar cordex grid
-ARCHIVE=$4  # path on tape archive
+YEAR=$1
+MONTH=$2
+INPUT_DIR=$3
+ARCHIVE_DIR="${4%/}"   # strip any trailing slash
 
-filenm=IVT_NORESM_CORDEX_$YEAR$MONTH.nc
+filenm="IVT_NORESM_CORDEX_${YEAR}${MONTH}.nc"
+src="$INPUT_DIR/$filenm"
+dst="$ARCHIVE_DIR/$filenm"
 
-echo "Archiving $filenm to $ARCHIVE ..."
-ecp "$INPUT_DIR/$filenm" "$ARCHIVE"
+echo "Archiving $filenm to $dst …"
+if [ ! -f "$src" ]; then
+  echo "❌ Source file not found: $src"
+  exit 2
+fi
 
-echo "Archive successful"
-
+ecp "$src" "$dst"
+echo "✅ Archive successful: $dst"

@@ -95,8 +95,8 @@ MODEL_INPUT="${BASE_DIR}/RACMO_input"
 TRACKABLE_OUTPUT="${BASE_DIR}/cordex"
 IVT_OUTPUT="${BASE_DIR}/ivt"
 ARCHIVE_OUT="ec:/nld1254/IVT/NORESM"
-ARCHIVE_IN="ec:/nld1254/ESMdata/NorESM2-MM/historical/r1i1p1f1/NCC_RACMOinput"
-mkdir -p "$MODEL_INPUT" "$TRACKABLE_OUTPUT" "$IVT_OUTPUT"
+
+mkdir -p "$MODEL_INPUT" "$TRACKABLE_OUTPUT" "$IVT_OUTPUT" "$ARCHIVE_OUT"
 
 PYTHON='/usr/local/apps/python3/3.12.9-01/bin/python3'
 
@@ -134,7 +134,7 @@ for YYYYMM in "${MONTH_LIST[@]}"; do
   YEAR=${YYYYMM:0:4}
   MONTH=${YYYYMM:4:2}
   EXP=$([[ $YEAR -lt 2015 ]] && echo "historical" || echo "ssp370")
-
+  ARCHIVE_IN="ec:/nld1254/ESMdata/NorESM2-MM/${EXP}/r1i1p1f1/NCC_RACMOinput"  
 
   echo ">>> Step 1: Download & prepare data for $YEAR-$MONTH ..."
   $PYTHON ./Download_process_cmip6.py \
@@ -146,19 +146,19 @@ for YYYYMM in "${MONTH_LIST[@]}"; do
   echo ">>> Step 2: Calculate IVT for $YEAR-$MONTH ..."
   ./calculate_ivt.sh "$YYYYMM" "$BASE_DIR" "$MODEL_INPUT" "$IVT_OUTPUT"
 
-  echo ">>> Step 3: wrap and add polar point, regrid and cut to CORDEX Arctic for $YEAR-$MONTH ..."
+  echo ">>> Step 3: wrap, regrid and cut to CORDEX Arctic for $YEAR-$MONTH ..."
   $PYTHON Regrid_RotPolar_CORDEX.py "$YEAR" "$MONTH" "$IVT_OUTPUT" "$TRACKABLE_OUTPUT" "$BASE_DIR"
 
   echo ">>> Step 4: Archive to tape for $YEAR-$MONTH ..."
  ./archive_IVT_CORDEX.sh "$YEAR" "$MONTH" "$TRACKABLE_OUTPUT" "$ARCHIVE_OUT"
   echo ">>> Done processing $YEAR-$MONTH"
 
-  echo ">>> Step 5: Clean intermediate files for $YEAR-$MONTH ..."
-  for VAR in q u v; do
-    rm -f "$MODEL_INPUT/${VAR}_${YYYYMM}_"*.nc
-  done
-  rm -f "$MODEL_INPUT"/*"${YYYYMM}"*.tar
-  rm -f "$MODEL_INPUT"/caf"${YYYYMM}"*.nc
+#  echo ">>> Step 5: Clean intermediate files for $YEAR-$MONTH ..."
+#  for VAR in q u v; do
+#    rm -f "$MODEL_INPUT/${VAR}_${YYYYMM}_"*.nc
+#  done
+#  rm -f "$MODEL_INPUT"/*"${YYYYMM}"*.tar
+#  rm -f "$MODEL_INPUT"/caf"${YYYYMM}"*.nc
 
   echo ">>> ✅ Done processing $YEAR-$MONTH"
 done
